@@ -85,7 +85,9 @@ export default function Home() {
     if (value.trim() === "") setResult("");
   };
 
-  const sample = `var a, b: integer;
+  const sample = `var a, b, c: integer;
+var d, e: string
+var f, a: real;
 var s: string[20];
 var arr: array[1..5] of real;
 var t, s: string[300];
