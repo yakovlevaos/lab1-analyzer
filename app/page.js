@@ -8,7 +8,7 @@ export default function Home() {
   const checkCode = () => {
     const lines = code.split("\n");
     const varDeclRegex =
-      /^var\s+([a-zA-Z_]\w*(\s*,\s*[a-zA-Z_]\w*)*)\s*:\s*(integer|real|string|char|boolean)\s*;$/i;
+      /^var\s+([a-zA-Z_]\w*(\s*,\s*[a-zA-Z_]\w*)*)\s*:\s*((integer|real|char|boolean|string(\[\d+\])?)|(array\s*\[\s*\d+\s*\.\.\s*\d+\s*\]\s*of\s*(integer|real|string|char|boolean)))\s*;$/i;
 
     let declaredVars = new Map();
     let errors = [];
@@ -38,10 +38,33 @@ export default function Home() {
             }. Ранее объявлена в строке ${prev.line}, позиция ${prev.pos}`
           );
         } else {
-          declaredVars.set(v, {
-            line: i + 1,
-            pos: line.indexOf(v) + 1
-          });
+          declaredVars.set(v, { line: i + 1, pos: line.indexOf(v) + 1 });
+        }
+      }
+      const strSizeMatch = trimmed.match(/string\[(\d+)\]/i);
+      if (strSizeMatch) {
+        const size = parseInt(strSizeMatch[1]);
+        if (size <= 0 || size > 255) {
+          errors.push(
+            `❗ Ошибка в строке ${
+              i + 1
+            }: недопустимый размер строки (${size}). Допустимо от 1 до 255.`
+          );
+        }
+      }
+
+      const arrayMatch = trimmed.match(
+        /array\s*\[\s*(\d+)\s*\.\.\s*(\d+)\s*\]/i
+      );
+      if (arrayMatch) {
+        const from = parseInt(arrayMatch[1]);
+        const to = parseInt(arrayMatch[2]);
+        if (from >= to) {
+          errors.push(
+            `❗ Ошибка в строке ${
+              i + 1
+            }: некорректный диапазон массива [${from}..${to}]. Левая граница должна быть меньше правой.`
+          );
         }
       }
     });
@@ -59,15 +82,14 @@ export default function Home() {
   const handleInputChange = (e) => {
     const value = e.target.value;
     setCode(value);
-    // если поле ввода стало пустым — очищаем результат
-    if (value.trim() === "") {
-      setResult("");
-    }
+    if (value.trim() === "") setResult("");
   };
 
-  const sample = `var a, b, c: integer;
-var d, e: string
-var f, a: real;`;
+  const sample = `var a, b: integer;
+var s: string[20];
+var arr: array[1..5] of real;
+var t, s: string[300];
+var wrongArr: array[10..5] of integer;`;
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-blue-50 to-purple-50 p-4">
@@ -100,8 +122,9 @@ var f, a: real;`;
             Вставить пример
           </button>
         </div>
+
         {result && (
-          <pre className="p-4 bg-gray-50 border border-gray-200 rounded-xl shadow-inner whitespace-pre-wrap text-sm overflow-x-auto mb-6 transition-opacity duration-200">
+          <pre className="p-4 bg-gray-50 border border-gray-200 rounded-xl shadow-inner whitespace-pre-wrap text-sm overflow-x-auto mb-6">
             {result}
           </pre>
         )}
