@@ -5,84 +5,138 @@ export default function Home() {
   const [code, setCode] = useState("");
   const [result, setResult] = useState("");
 
+  // Регулярное выражение с гибким пробелом/табуляцией
+  const varWithDeclRegex =
+    /^\s*var\s+([a-zA-Z_]\w*(\s*,\s*[a-zA-Z_]\w*)*)\s*:\s*(((integer|real|char|boolean|string)(\s*\[\s*\d+\s*\])?)|(array\s*\[\s*(\d+\s*\.\.\s*\d+)(\s*,\s*\d+\s*\.\.\s*\d+)*\]\s*of\s*(integer|real|string|char|boolean)))\s*;\s*$/i;
+  const declInsideBlockRegex =
+    /^\s*([a-zA-Z_]\w*(\s*,\s*[a-zA-Z_]\w*)*)\s*:\s*(((integer|real|char|boolean|string)(\s*\[\s*\d+\s*\])?)|(array\s*\[\s*(\d+\s*\.\.\s*\d+)(\s*,\s*\d+\s*\.\.\s*\d+)*\]\s*of\s*(integer|real|string|char|boolean)))\s*;\s*$/i;
+
   const checkCode = () => {
-    const lines = code.split("\n");
-    const varDeclRegex =
-      /^var\s+([a-zA-Z_]\w*(\s*,\s*[a-zA-Z_]\w*)*)\s*:\s*((integer|real|char|boolean|string(\[\d+\])?)|(array\s*\[\s*\d+\s*\.\.\s*\d+\s*\]\s*of\s*(integer|real|string|char|boolean)))\s*;$/i;
+    // Разобьем исходный код на физические строки
+    const rawLines = code.split("\n");
+
+    // Собираем логические объявления переменных со всеми пробелами и табуляцией в строках
+    const logicalLines = [];
+    let buffer = "";
+
+    for (let rawLine of rawLines) {
+      // Уберем только переносы строк, сохраним пробелы и табы
+      let line = rawLine.replace(/\r/g, "").trimRight();
+
+      // Объединяем строки в buffer до появления ';'
+      if (buffer) {
+        buffer += " " + line.trimLeft();
+      } else {
+        buffer = line;
+      }
+
+      if (buffer.includes(";")) {
+        // Полное объявление собрали
+        logicalLines.push(buffer);
+        buffer = "";
+      }
+    }
+    // если что осталось незавершенное, добавим как есть
+    if (buffer.trim() !== "") {
+      logicalLines.push(buffer);
+    }
 
     let declaredVars = new Map();
     let errors = [];
+    let insideVarBlock = false;
 
-    lines.forEach((line, i) => {
+    logicalLines.forEach((line, idx) => {
       const trimmed = line.trim();
-      if (!trimmed) return;
 
-      const match = trimmed.match(varDeclRegex);
-      if (!match) {
-        const pos = line.search(/\S/);
-        errors.push(
-          `❗ Ошибка в строке ${i + 1}, позиция ${
-            pos + 1
-          }: синтаксическая ошибка`
-        );
-        return;
-      }
+      if (!insideVarBlock) {
+        // Проверка строки с var и объявлением
+        if (varWithDeclRegex.test(trimmed)) {
+          insideVarBlock = true;
+          const match = trimmed.match(varWithDeclRegex);
+          checkVars(match[1], idx + 1, trimmed);
 
-      const vars = match[1].split(",").map((v) => v.trim());
-      for (let v of vars) {
-        if (declaredVars.has(v)) {
-          const prev = declaredVars.get(v);
-          errors.push(
-            `❗ Дубликат переменной "${v}" в строке ${i + 1}, позиция ${
-              line.indexOf(v) + 1
-            }. Ранее объявлена в строке ${prev.line}, позиция ${prev.pos}`
-          );
+          checkAdditionalChecks(trimmed, idx + 1);
         } else {
-          declaredVars.set(v, { line: i + 1, pos: line.indexOf(v) + 1 });
-        }
-      }
-      const strSizeMatch = trimmed.match(/string\[(\d+)\]/i);
-      if (strSizeMatch) {
-        const size = parseInt(strSizeMatch[1]);
-        if (size <= 0 || size > 255) {
           errors.push(
             `❗ Ошибка в строке ${
-              i + 1
-            }: недопустимый размер строки (${size}). Допустимо от 1 до 255.`
+              idx + 1
+            }: ожидалось объявление с ключевым словом var`
           );
         }
-      }
+      } else {
+        // Проверка объявлений внутри блока var без var в строке
+        if (declInsideBlockRegex.test(trimmed)) {
+          const match = trimmed.match(declInsideBlockRegex);
+          checkVars(match[1], idx + 1, trimmed);
 
-      const arrayMatch = trimmed.match(
-        /array\s*\[\s*(\d+)\s*\.\.\s*(\d+)\s*\]/i
-      );
-      if (arrayMatch) {
-        const from = parseInt(arrayMatch[1]);
-        const to = parseInt(arrayMatch[2]);
-        if (from >= to) {
+          checkAdditionalChecks(trimmed, idx + 1);
+        } else {
+          // Любая строка, не подходящая под объявление, завершает блок
+          insideVarBlock = false;
+          // Но эту строку пересмотреть следующим итератором (пересчет индекса)
           errors.push(
             `❗ Ошибка в строке ${
-              i + 1
-            }: некорректный диапазон массива [${from}..${to}]. Левая граница должна быть меньше правой.`
+              idx + 1
+            }: синтаксическая ошибка объявления переменных внутри блока var`
           );
         }
       }
     });
 
-    let report = "";
-    if (errors.length === 0) {
-      report = "✅ Описание корректное";
-    } else {
-      report = errors.join("\n");
+    function checkVars(varsStr, lineNum, lineText) {
+      const vars = varsStr.split(",").map((v) => v.trim());
+      for (let v of vars) {
+        if (declaredVars.has(v)) {
+          const prev = declaredVars.get(v);
+          errors.push(
+            `❗ Дубликат переменной "${v}" в строке ${lineNum}, позиции ${
+              lineText.indexOf(v) + 1
+            }. Ранее объявлена в строке ${prev.line}, позиции ${prev.pos}`
+          );
+        } else {
+          declaredVars.set(v, { line: lineNum, pos: lineText.indexOf(v) + 1 });
+        }
+      }
     }
 
-    setResult(report);
+    function checkAdditionalChecks(line, lineNum) {
+      // Проверка размера string[n]
+      const strSizeMatch = line.match(/string\s*\[\s*(\d+)\s*\]/i);
+      if (strSizeMatch) {
+        const size = parseInt(strSizeMatch[1]);
+        if (size <= 0 || size > 255) {
+          errors.push(
+            `❗ Ошибка в строке ${lineNum}: недопустимый размер строки (${size}). Допустимо от 1 до 255.`
+          );
+        }
+      }
+      // Проверка массива с несколькими измерениями
+      const arrayMatch = line.match(
+        /array\s*\[\s*(\d+\s*\.\.\s*\d+(\s*,\s*\d+\s*\.\.\s*\d+)*)\s*\]/i
+      );
+      if (arrayMatch) {
+        const ranges = arrayMatch[1].split(/\s*,\s*/);
+        for (let range of ranges) {
+          const [fromStr, toStr] = range.split(/\s*\.\.\s*/);
+          const from = parseInt(fromStr);
+          const to = parseInt(toStr);
+          if (from >= to) {
+            errors.push(
+              `❗ Ошибка в строке ${lineNum}: некорректный диапазон массива [${from}..${to}]. Левая граница должна быть меньше правой.`
+            );
+          }
+        }
+      }
+    }
+
+    setResult(
+      errors.length === 0 ? "✅ Описание корректное" : errors.join("\n")
+    );
   };
 
   const handleInputChange = (e) => {
-    const value = e.target.value;
-    setCode(value);
-    if (value.trim() === "") setResult("");
+    setCode(e.target.value);
+    if (e.target.value.trim() === "") setResult("");
   };
 
   const sample = `var a, b, c: integer;
