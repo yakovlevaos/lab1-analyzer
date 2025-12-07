@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 
-// Ключевые слова (нельзя использовать как имена переменных)
+// Множество ключевых слов (в нижнем регистре)
 const KEYWORDS = new Set([
   "var",
   "array",
@@ -13,15 +13,11 @@ const KEYWORDS = new Set([
   "string"
 ]);
 
-// Проверка имени идентификатора
+// Регулярка для идентификатора
 const IDENT_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-// Проверка целого числа (включая отрицательные)
-const INTEGER_REGEX = /^-?\d+$/;
-
 /* -----------------------------------------------------------
-   ЛЕКСИЧЕСКИЙ АНАЛИЗАТОР (TOKENIZER)
-   Разбивает входной текст на токены
+   ЛЕКСИЧЕСКИЙ АНАЛИЗАТОР (ТОКЕНИЗАТОР)
 ----------------------------------------------------------- */
 function tokenize(code) {
   const tokens = [];
@@ -46,7 +42,7 @@ function tokenize(code) {
   while (i < code.length) {
     const ch = code[i];
 
-    // Переход на новую строку
+    // переход на новую строку
     if (ch === "\r") {
       i++;
       if (code[i] === "\n") i++;
@@ -61,14 +57,14 @@ function tokenize(code) {
       continue;
     }
 
-    // Пробельные символы
+    // пробелы и табуляция
     if (" \t\f\v".includes(ch)) {
       i++;
       col++;
       continue;
     }
 
-    // Комментарии { ... }
+    // комментарий { ... }
     if (ch === "{") {
       const startL = line,
         startC = col;
@@ -108,7 +104,7 @@ function tokenize(code) {
       continue;
     }
 
-    // Комментарии (* ... *)
+    // комментарий (* ... *)
     if (ch === "(" && code[i + 1] === "*") {
       const startL = line,
         startC = col;
@@ -148,13 +144,15 @@ function tokenize(code) {
       continue;
     }
 
-    // Двухсимвольные операторы
+    // оператор :=
     if (ch === ":" && code[i + 1] === "=") {
       pushToken("SYMBOL", ":=");
       i += 2;
       col += 2;
       continue;
     }
+
+    // оператор ..
     if (ch === "." && code[i + 1] === ".") {
       pushToken("SYMBOL", "..");
       i += 2;
@@ -162,7 +160,7 @@ function tokenize(code) {
       continue;
     }
 
-    // Отрицательное число (важно обрабатывать до символов)
+    // отрицательное число
     if (ch === "-" && isDigit(code[i + 1])) {
       let j = i + 1;
       while (j < code.length && isDigit(code[j])) j++;
@@ -172,7 +170,7 @@ function tokenize(code) {
       continue;
     }
 
-    // Односимвольные символы
+    // одиночный символ
     if (":;.,[]()^@:+-*/<>=".includes(ch)) {
       pushToken("SYMBOL", ch);
       i++;
@@ -180,7 +178,7 @@ function tokenize(code) {
       continue;
     }
 
-    // Положительное число
+    // положительное число
     if (isDigit(ch)) {
       let j = i;
       while (j < code.length && isDigit(code[j])) j++;
@@ -190,7 +188,7 @@ function tokenize(code) {
       continue;
     }
 
-    // Идентификаторы / ключевые слова
+    // идентификатор или ключевое слово
     if (isAlpha(ch)) {
       let j = i;
       while (j < code.length && isAlnum(code[j])) j++;
@@ -201,7 +199,7 @@ function tokenize(code) {
       continue;
     }
 
-    // Неизвестный символ
+    // неизвестный символ
     pushToken("UNKNOWN", ch);
     i++;
     col++;
@@ -212,8 +210,7 @@ function tokenize(code) {
 }
 
 /* -----------------------------------------------------------
-   ОСНОВНАЯ СТРУКТУРА ПАРСЕРА
-   Двигается по массиву токенов
+   ПАРСЕР
 ----------------------------------------------------------- */
 function Parser(tokens) {
   this.tokens = tokens;
@@ -226,94 +223,166 @@ Parser.prototype.next = function () {
   return this.tokens[this.pos++];
 };
 
-// Проверка корректности имени переменной
-function checkIdent(tok) {
-  if (!IDENT_REGEX.test(tok.value) || KEYWORDS.has(tok.value.toLowerCase()))
-    throw {
+// проверка идентификатора
+function checkIdent(tok, errors) {
+  if (!tok) return;
+  if (!IDENT_REGEX.test(tok.value) || KEYWORDS.has(tok.value.toLowerCase())) {
+    errors.push({
       type: "syntax",
       line: tok.line,
       col: tok.col,
-      message: "Недопустимое имя переменной"
-    };
+      message: "Недопустимый идентификатор"
+    });
+  }
 }
 
 /* -----------------------------------------------------------
    ПАРСЕР ТИПОВ
 ----------------------------------------------------------- */
-function parseType(parser) {
+function parseType(parser, errors) {
   const tok = parser.peek();
-
+  if (!tok) {
+    errors.push({ type: "syntax", line: 0, col: 0, message: "Ожидался тип" });
+    return { kind: "unknown" };
+  }
   if (tok.type === "KEYWORD") {
-    const v = tok.value;
-
-    // Простые типы
+    const v = tok.value.toLowerCase();
     if (["integer", "real", "char", "boolean"].includes(v)) {
       parser.next();
       return { kind: v };
     }
 
-    // string и string[10]
     if (v === "string") {
       parser.next();
       const nxt = parser.peek();
-
-      if (nxt.type === "SYMBOL" && nxt.value === "[") {
-        parser.next(); // [
-
-        const lenTok = parser.peek();
-        if (lenTok.type !== "NUMBER" || !INTEGER_REGEX.test(lenTok.value))
-          throw { type: "syntax", line: lenTok.line, col: lenTok.col };
-
-        const size = parseInt(parser.next().value, 10);
-
-        const close = parser.peek();
-        if (!(close.type === "SYMBOL" && close.value === "]"))
-          throw { type: "syntax", line: close.line, col: close.col };
-
+      if (nxt && nxt.type === "SYMBOL" && nxt.value === "[") {
         parser.next();
+        const lenTok = parser.peek();
+        if (!lenTok || lenTok.type !== "NUMBER") {
+          errors.push({
+            type: "syntax",
+            line: lenTok?.line || tok.line,
+            col: lenTok?.col || tok.col,
+            message: "Недопустимый символ"
+          });
+          if (lenTok) parser.next();
+          return { kind: "string", size: 0 };
+        }
+        const size = parseInt(parser.next().value, 10);
+        if (size < 1 || size > 255) {
+          errors.push({
+            type: "syntax",
+            line: lenTok.line,
+            col: lenTok.col,
+            message: "Размер строки должен быть от 1 до 255"
+          });
+        }
+        const close = parser.peek();
+        if (!close || close.type !== "SYMBOL" || close.value !== "]") {
+          errors.push({
+            type: "syntax",
+            line: close?.line || lenTok.line,
+            col: close?.col || lenTok.col,
+            message: "Недопустимый символ"
+          });
+          if (close && close.type !== "EOF") parser.next();
+          return { kind: "string", size };
+        }
+        parser.next();
+
+        // проверка лишних символов
+        // после ']' допускается только ';' или конец строки
+        const afterClose = parser.peek();
+        if (
+          afterClose &&
+          afterClose.type === "SYMBOL" &&
+          afterClose.value !== ";" &&
+          afterClose.value !== ","
+        ) {
+          errors.push({
+            type: "syntax",
+            line: afterClose.line,
+            col: afterClose.col,
+            message: `Недопустимый символ ${afterClose.value}`
+          });
+          parser.next();
+        }
+
         return { kind: "string", size };
       }
-
       return { kind: "string" };
     }
 
-    // array [...]
     if (v === "array") {
       parser.next();
-
       const open = parser.peek();
-      if (!(open.type === "SYMBOL" && open.value === "[")) {
-        throw { type: "syntax", line: open.line, col: open.col };
+      if (!open || open.type !== "SYMBOL" || open.value !== "[") {
+        errors.push({
+          type: "syntax",
+          line: open?.line || tok.line,
+          col: open?.col || tok.col,
+          message: "Недопустимый символ"
+        });
+        if (open) parser.next();
+        return { kind: "array", ranges: [], baseType: { kind: "unknown" } };
       }
       parser.next();
 
       const ranges = [];
-
       while (true) {
         const fromTok = parser.peek();
-        if (fromTok.type !== "NUMBER" || !INTEGER_REGEX.test(fromTok.value)) {
-          throw { type: "syntax", line: fromTok.line, col: fromTok.col };
+        if (!fromTok || fromTok.type !== "NUMBER") {
+          if (fromTok) {
+            errors.push({
+              type: "syntax",
+              line: fromTok.line,
+              col: fromTok.col,
+              message: `Недопустимый символ ${fromTok.value}`
+            });
+            parser.next();
+          }
+          break;
         }
         const from = parseInt(parser.next().value, 10);
 
         const dots = parser.peek();
-        if (!(dots.type === "SYMBOL" && dots.value === "..")) {
-          throw { type: "syntax", line: dots.line, col: dots.col };
+        if (!dots || dots.type !== "SYMBOL" || dots.value !== "..") {
+          errors.push({
+            type: "syntax",
+            line: dots?.line || fromTok.line,
+            col: dots?.col || fromTok.col,
+            message: "Недопустимый символ"
+          });
+          if (dots) parser.next();
+          break;
         }
         parser.next();
 
         const toTok = parser.peek();
-        if (toTok.type !== "NUMBER" || !INTEGER_REGEX.test(toTok.value)) {
-          throw { type: "syntax", line: toTok.line, col: toTok.col };
+        if (!toTok || toTok.type !== "NUMBER") {
+          if (toTok) {
+            errors.push({
+              type: "syntax",
+              line: toTok.line,
+              col: toTok.col,
+              message: `Недопустимый символ ${toTok.value}`
+            });
+            parser.next();
+          }
+          break;
         }
         const to = parseInt(parser.next().value, 10);
-
         if (from > to)
-          throw { type: "syntax", line: fromTok.line, col: fromTok.col };
-
+          errors.push({
+            type: "syntax",
+            line: fromTok.line,
+            col: fromTok.col,
+            message: "Левая граница больше правой"
+          });
         ranges.push({ from, to });
 
         const sep = parser.peek();
+        if (!sep) break;
         if (sep.type === "SYMBOL" && sep.value === ",") {
           parser.next();
           continue;
@@ -322,41 +391,74 @@ function parseType(parser) {
           parser.next();
           break;
         }
-        throw { type: "syntax", line: sep.line, col: sep.col };
+        errors.push({
+          type: "syntax",
+          line: sep.line,
+          col: sep.col,
+          message: `Недопустимый символ ${sep.value}`
+        });
+        parser.next();
+        break;
       }
 
       const ofTok = parser.peek();
-      if (!(ofTok.type === "KEYWORD" && ofTok.value === "of")) {
-        throw { type: "syntax", line: ofTok.line, col: ofTok.col };
+      if (
+        !ofTok ||
+        ofTok.type !== "KEYWORD" ||
+        ofTok.value.toLowerCase() !== "of"
+      ) {
+        errors.push({
+          type: "syntax",
+          line: ofTok?.line || tok.line,
+          col: ofTok?.col || tok.col,
+          message: "Пропущено of"
+        });
+        if (ofTok) parser.next();
+        return { kind: "array", ranges, baseType: { kind: "unknown" } };
       }
       parser.next();
-
-      const baseType = parseType(parser);
+      const baseType = parseType(parser, errors);
       return { kind: "array", ranges, baseType };
     }
   }
 
-  throw { type: "syntax", line: tok.line, col: tok.col };
+  errors.push({
+    type: "syntax",
+    line: tok.line,
+    col: tok.col,
+    message: "Неверный тип"
+  });
+  parser.next();
+  return { kind: "unknown" };
 }
 
 /* -----------------------------------------------------------
-   ПАРСИНГ ОБЪЯВЛЕНИЯ ПЕРЕМЕННЫХ
+   ПАРСЕР ОБЪЯВЛЕНИЯ ПЕРЕМЕННЫХ
 ----------------------------------------------------------- */
-function parseDeclaration(parser, declared) {
+function parseDeclaration(parser, declared, errors) {
   const ids = [];
+  const lineStart = parser.peek()?.line || 0;
 
   while (true) {
     const tok = parser.peek();
-    if (tok.type !== "IDENT")
-      throw { type: "syntax", line: tok.line, col: tok.col };
-
-    checkIdent(tok);
-
+    if (!tok || tok.type !== "IDENT") {
+      if (tok) {
+        errors.push({
+          type: "syntax",
+          line: tok.line,
+          col: tok.col,
+          message: `Недопустимый символ ${tok.value}`
+        });
+        parser.next();
+      }
+      break;
+    }
+    checkIdent(tok, errors);
     const name = parser.next().value;
-    ids.push({ name, line: tok.line, col: tok.col });
+    ids.push({ name, low: name.toLowerCase(), line: tok.line, col: tok.col });
 
     const sep = parser.peek();
-    if (sep.type === "SYMBOL" && sep.value === ",") {
+    if (sep && sep.type === "SYMBOL" && sep.value === ",") {
       parser.next();
       continue;
     }
@@ -364,82 +466,165 @@ function parseDeclaration(parser, declared) {
   }
 
   const colon = parser.peek();
-  if (!(colon.type === "SYMBOL" && colon.value === ":"))
-    throw { type: "syntax", line: colon.line, col: colon.col };
-  parser.next();
+  if (!colon || colon.type !== "SYMBOL" || colon.value !== ":") {
+    if (colon && colon.type === "UNKNOWN") {
+      errors.push({
+        type: "syntax",
+        line: lineStart,
+        col: colon.col,
+        message: `Недопустимый символ ${colon.value}`
+      });
+      parser.next();
+    } else {
+      errors.push({
+        type: "syntax",
+        line: lineStart,
+        col: 0,
+        message: "Пропущен :"
+      });
+      if (colon) parser.next();
+    }
+  } else parser.next();
 
-  const typeInfo = parseType(parser);
+  parseType(parser, errors);
+
+  // определяем последнюю значимую позицию в строке для ;
+  const lastTok = parser.tokens
+    .slice(0, parser.pos)
+    .filter((t) => t.line === lineStart && t.type !== "UNKNOWN")
+    .slice(-1)[0];
 
   const semi = parser.peek();
-  if (!(semi.type === "SYMBOL" && semi.value === ";"))
-    throw { type: "syntax", line: semi.line, col: semi.col };
-  parser.next();
+  let errLine = lastTok?.line || lineStart;
+  let errCol = lastTok ? lastTok.col + (lastTok.value?.length || 0) : 1;
+
+  if (!semi || semi.type !== "SYMBOL" || semi.value !== ";") {
+    if (semi && semi.type === "UNKNOWN") {
+      errors.push({
+        type: "syntax",
+        line: errLine,
+        col: errCol,
+        message: `Недопустимый символ ${semi.value}`
+      });
+      parser.next();
+    } else {
+      errors.push({
+        type: "syntax",
+        line: errLine,
+        col: errCol,
+        message: "Пропущен ;"
+      });
+      if (semi && semi.type !== "EOF") parser.next();
+    }
+  } else parser.next();
+
+  // Проверка всех неизвестных символов на той же строке после ;
+  while (true) {
+    const tok = parser.peek();
+    if (!tok || tok.line !== lineStart) break;
+    if (tok.type === "UNKNOWN") {
+      errors.push({
+        type: "syntax",
+        line: tok.line,
+        col: tok.col,
+        message: `Недопустимый символ ${tok.value}`
+      });
+    }
+    parser.next();
+  }
 
   for (const id of ids) {
-    const key = id.name.toLowerCase();
-    if (declared.has(key))
-      throw {
+    if (declared.has(id.low)) {
+      errors.push({
         type: "syntax",
         line: id.line,
         col: id.col,
-        message: `Повторное объявление '${id.name}'`
-      };
-
-    declared.set(key, { line: id.line, col: id.col });
+        message: `Повторное объявление переменной '${id.name}'`
+      });
+    } else declared.set(id.low, { line: id.line, col: id.col });
   }
 
-  return { ids, typeInfo };
+  return { ids };
 }
 
 /* -----------------------------------------------------------
-   ОСНОВНОЙ ПАРСЕР ПРОГРАММЫ
+   ГЛАВНЫЙ ПАРСЕР
 ----------------------------------------------------------- */
-function parse(tokens) {
+function parse(tokens, errors) {
   const parser = new Parser(tokens);
   const declared = new Map();
-
   while (true) {
     const t = parser.peek();
-    if (t.type === "EOF") break;
-
-    if (t.type === "KEYWORD" && t.value === "var") {
+    if (!t || t.type === "EOF") break;
+    if (t.type === "KEYWORD" && t.value.toLowerCase() === "var") {
       parser.next();
-
       while (true) {
         const look = parser.peek();
-        if (look.type === "IDENT") {
-          parseDeclaration(parser, declared);
+        if (look && look.type === "IDENT") {
+          parseDeclaration(parser, declared, errors);
           continue;
         }
         break;
       }
       continue;
     }
-
-    throw { type: "syntax", line: t.line, col: t.col };
+    if (t.type === "UNKNOWN") {
+      errors.push({
+        type: "syntax",
+        line: t.line,
+        col: t.col,
+        message: `Недопустимый символ ${t.value}`
+      });
+      parser.next();
+    } else {
+      errors.push({
+        type: "syntax",
+        line: t.line,
+        col: t.col,
+        message: "Ожидалось ключевое слово var"
+      });
+      parser.next();
+    }
   }
-
   return declared;
 }
 
 /* -----------------------------------------------------------
-   ФОРМА
+   РЕАКТ-КОМПОНЕНТ
 ----------------------------------------------------------- */
 export default function Home() {
   const [code, setCode] = useState("");
   const [result, setResult] = useState("");
+  const [cursorPos, setCursorPos] = useState({ line: 1, col: 1 });
 
-  const sample = `var d: array [-10..6, 6..9] of integer;`;
+  const sample = `var a, b, c: real;
+d: array [1..6, 6..9] of integer;
+s1: string;
+s2: string[10];`;
+
+  const updateCursorPosition = (e) => {
+    const textarea = e.target;
+    const pos = textarea.selectionStart;
+    const lines = textarea.value.substr(0, pos).split("\n");
+    const line = lines.length;
+    const col = lines[lines.length - 1].length + 1;
+    setCursorPos({ line, col });
+  };
 
   const checkCode = () => {
     setResult("");
-
+    const errors = [];
     try {
       const tokens = tokenize(code);
-      try {
-        parse(tokens);
+      parse(tokens, errors);
+
+      console.log("Ошибки:", errors);
+
+      if (errors.length === 0) {
         setResult("✅ Описание корректное");
-      } catch (e) {
+      } else {
+        errors.sort((a, b) => a.line - b.line || a.col - b.col);
+        const e = errors[0];
         setResult(
           `❗ Синтаксическая ошибка в строке ${e.line}, позиция ${e.col}${
             e.message ? ": " + e.message : ""
@@ -461,16 +646,25 @@ export default function Home() {
         <h1 className="text-2xl font-bold mb-4 text-gray-800 text-center">
           Проверка описания переменных (Pascal)
         </h1>
-
         <textarea
-          className="w-full h-56 p-4 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none shadow-sm mb-4"
+          className="w-full h-56 p-4 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none shadow-sm mb-2"
           placeholder="Вставьте код..."
           value={code}
           onChange={(e) => {
             setCode(e.target.value);
             if (!e.target.value.trim()) setResult("");
+            updateCursorPosition(e);
           }}
+          onClick={updateCursorPosition}
+          onKeyUp={updateCursorPosition}
+          onMouseUp={updateCursorPosition}
         />
+        <div className="text-sm text-gray-600 mb-4">
+          <div>
+            Курсор: строка {cursorPos.line}, позиция {cursorPos.col}
+          </div>
+          <div>Позиция -- положение курсора перед символом</div>
+        </div>
 
         <div className="flex gap-4 justify-center mb-4">
           <button
@@ -479,7 +673,6 @@ export default function Home() {
           >
             Проверить
           </button>
-
           <button
             onClick={() => {
               setCode(sample);
@@ -489,7 +682,6 @@ export default function Home() {
           >
             Пример
           </button>
-
           <button
             onClick={() => {
               setCode("");
@@ -500,7 +692,6 @@ export default function Home() {
             Очистить
           </button>
         </div>
-
         {result && (
           <pre className="p-4 bg-gray-50 border border-gray-200 rounded-xl shadow-inner whitespace-pre-wrap text-sm overflow-x-auto">
             {result}
